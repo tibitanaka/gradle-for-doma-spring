@@ -1,0 +1,112 @@
+// Gradle プラグイン設定
+plugins {
+	id 'org.springframework.boot' version '2.1.9.RELEASE'
+	id 'io.spring.dependency-management' version '1.0.8.RELEASE'
+	id 'java'
+	id 'war'
+	id 'eclipse'
+}
+
+// 基本設定
+group = 'jp.co.tibilabo'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '11'
+
+// Warプラグインを再有効化（bootプラグインにより自動的に無効化される）
+war {
+    enabled = true
+    archiveName = rootProject.name + '.war'
+} 
+
+// Doma用
+task copyDomaResources(type: Sync)  {
+    from sourceSets.main.resources.srcDirs
+    into compileJava.destinationDir
+    include 'doma.compile.config'
+    include 'META-INF/**/*.sql'
+    
+    
+    include 'META-INF/**/*.script'
+}
+compileJava.dependsOn copyDomaResources
+
+// リポジトリ
+
+repositories {
+	mavenCentral()
+}
+
+// 依存設定
+dependencies {
+	// Spring boot
+	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	runtimeOnly 'mysql:mysql-connector-java'
+	providedRuntime 'org.springframework.boot:spring-boot-starter-tomcat'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+	// Doma2
+	implementation "org.seasar.doma:doma:2.25.1"
+    implementation 'org.seasar.doma.boot:doma-spring-boot-starter:1.1.1'
+    annotationProcessor "org.seasar.doma:doma:2.25.1"
+}
+
+// Eclipseプロジェクト生成
+eclipse {
+    classpath {
+        file {
+	        whenMerged {
+	            entries.each { source ->
+                    // テスト用ではないソース定義について、出力先をデフォルトパスに揃える
+                    if (source.kind == 'src' && !source.toString().contains('test')) {
+                        source.output = null
+                    }
+	            }
+	        }
+            withXml { provider ->
+            	// .apt_generated のノードを追加。場合により Eclipse APT に上書きされる
+                provider.asNode().appendNode( 'classpathentry', [ kind: 'src', path: '.apt_generated'])
+            }
+        }
+    }
+	jdt {
+        // Eclipse コンパイラ設定 > アノテーションプロセッサ設定の有効化
+        file {
+            withProperties { properties ->
+                properties.setProperty('org.eclipse.jdt.core.compiler.processAnnotations', 'enabled')
+            }
+        }
+    }
+}
+
+tasks {
+	// warプラグイン配下でもロード時にeclipseJdtタスクを実行する
+	eclipseWtpComponent.dependsOn eclipseJdt
+}
+
+eclipseWtpComponent {
+    doLast { 
+        // Eclipse コンパイラ設定 > アノテーションプロセッサ設定の詳細を登録
+        // ※eclipse プラグインがデフォルトで対応したら不要
+        file('.settings/org.eclipse.jdt.apt.core.prefs').withWriter { writer ->
+            def prefText = """\
+			    |eclipse.preferences.version=1
+			    |org.eclipse.jdt.apt.aptEnabled=true
+			    |org.eclipse.jdt.apt.genSrcDir=.apt_generated
+                |org.eclipse.jdt.apt.processorOptions/
+			    |org.eclipse.jdt.apt.reconcileEnabled=true
+			    |"""
+            writer.append prefText.stripMargin()
+        }
+    	// Gradle アノテーションプロセッサから doma の jar を探し、Eclipse 側のファクトリパス設定に登録
+    	// ※同上
+        file('.factorypath').withWriter { writer ->
+            def domaJar = configurations.annotationProcessor.find {
+                it.name.startsWith('doma-2')
+            }
+            new groovy.xml.MarkupBuilder(writer).factorypath() {
+                factorypathentry(kind:'EXTJAR', id:domaJar, enabled:true, runInBatchMode:false)
+            }
+        }
+    }
+}
